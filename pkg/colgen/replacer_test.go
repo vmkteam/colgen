@@ -163,7 +163,7 @@ func newUserSummary(in *db.User) *UserSummary {
 				t.Errorf("Generate() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
-			tt.want = strings.Replace(tt.want, "|", "`", -1)
+			tt.want = strings.ReplaceAll(tt.want, "|", "`")
 			if !reflect.DeepEqual(got[0].Replace, tt.want) {
 				t.Errorf("Generate() got = %v, want %v", got[0].Replace, tt.want)
 				os.Stdout.WriteString(got[0].Replace)

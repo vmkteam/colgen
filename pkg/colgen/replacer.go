@@ -12,10 +12,10 @@ import (
 	"golang.org/x/tools/go/packages"
 )
 
-// Replacer
-//colgen@NewCall(db)
-//colgen@NewUser(db)
-//colgen@newUserSummary(dating.User,full,json)
+// Replacer.
+//   //colgen@NewCall(db)
+//   //colgen@NewUser(db)
+//   //colgen@newUserSummary(dating.User,full,json)
 
 type Field struct {
 	Name string
@@ -85,7 +85,7 @@ func ParseReplaceRule(rule string) (ReplaceRule, error) {
 }
 
 func ParseReplaceRules(rules []string) ([]ReplaceRule, error) {
-	var rr []ReplaceRule
+	rr := make([]ReplaceRule, 0, len(rules))
 	for _, rule := range rules {
 		r, err := ParseReplaceRule(rule)
 		if err != nil {
@@ -109,15 +109,6 @@ func NewReplacer() *Replacer {
 func (rl *Replacer) UsePackageDir(path string) (err error) {
 	rl.pkg, err = loadPackage(path)
 	return
-}
-
-// lookupTypes returns type for given struct name or nil if not found.
-func (rl *Replacer) lookupType(s string) types.Object {
-	if rl.pkg == nil {
-		return nil
-	}
-
-	return rl.pkg.Types.Scope().Lookup(s)
 }
 
 func (rl *Replacer) findImportedType(fullTypeName string) types.Object {
@@ -144,7 +135,7 @@ func newFields(rule ReplaceRule, fields []entityField) []Field {
 		return nil
 	}
 
-	var ff []Field
+	ff := make([]Field, 0, len(fields))
 	for _, f := range fields {
 		if !f.IsExported {
 			continue

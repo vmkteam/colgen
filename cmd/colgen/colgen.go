@@ -34,18 +34,23 @@ import (
 	"bufio"
 	"bytes"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
+	"time"
 
 	"github.com/vmkteam/colgen/pkg/colgen"
 )
 
 var (
-	flList    = flag.Bool("list", false, "use List suffix for collection")
-	flImports = flag.String("imports", "", "use custom imports: e.g pkg/db, pkg/domain")
-	flFuncPkg = flag.String("funcpkg", "", "use funcpkg for Map & MapP functions")
+	flList         = flag.Bool("list", false, "use List suffix for collection")
+	flImports      = flag.String("imports", "", "use custom imports: e.g pkg/db, pkg/domain")
+	flFuncPkg      = flag.String("funcpkg", "", "use funcpkg for Map & MapP functions")
+	flAssistantKey = flag.String("ai", "", "use deepseek assistant assistant, provide api key")
+	flVersion      = flag.Bool("v", false, "print version and exit")
 )
 
 func exitOnErr(err error) {
@@ -58,9 +63,9 @@ func main() {
 	log.SetFlags(log.Lshortfile)
 	flag.Parse()
 
-	args := flag.Args()
-	if len(args) == 0 {
-		args = []string{"."}
+	if *flVersion {
+		fmt.Printf("colgen version: %v\n", appVersion())
+		os.Exit(0)
 	}
 
 	// set filename from go:generate
@@ -70,8 +75,17 @@ func main() {
 	}
 
 	// get colgen lines from file
-	cl, err := readFile(filename)
+	cl, err := readFile(filename, *flAssistantKey != "")
 	exitOnErr(err)
+
+	// if assistant was found, process only one instruction
+	if len(cl.assistant) > 0 {
+		now := time.Now()
+		log.Println("assisting: ", cl.assistant[0])
+		assistFile(cl.assistant[0], filename)
+		log.Println("assisting done", time.Since(now))
+		return
+	}
 
 	if len(cl.injection) > 0 {
 		log.Println("replacing injections")
@@ -83,6 +97,24 @@ func main() {
 		return
 	}
 	generateFile(cl, filename)
+}
+
+func assistFile(assistPrompt, filename string) {
+	aa := colgen.NewAssistant(*flAssistantKey)
+
+	if err := aa.IsValidMode(assistPrompt); err != nil {
+		exitOnErr(err)
+	}
+
+	content, err := os.ReadFile(filename)
+	exitOnErr(err)
+
+	r, err := aa.Generate(assistPrompt, string(content))
+	exitOnErr(err)
+
+	// write file
+	err = os.WriteFile(filename+".md", []byte(r), os.ModePerm)
+	exitOnErr(err)
 }
 
 func replaceFile(cl colgenLines, filename string) {
@@ -110,7 +142,7 @@ func replaceFile(cl colgenLines, filename string) {
 
 func generateFile(cl colgenLines, filename string) {
 	// init generator and rules
-	g := colgen.NewGenerator(cl.pkgName, *flImports, *flFuncPkg)
+	g := colgen.NewGenerator(cl.pkgName, *flImports, *flFuncPkg, appVersion())
 	rules, err := colgen.ParseRules(cl.lines, *flList)
 	exitOnErr(err)
 
@@ -139,11 +171,12 @@ func generateFile(cl colgenLines, filename string) {
 type colgenLines struct {
 	lines     []string
 	injection []string
+	assistant []string
 	pkgName   string
 }
 
 // readFile parses file line by line and returns all colgen lines without prefix.
-func readFile(filename string) (result colgenLines, err error) {
+func readFile(filename string, withAssistant bool) (result colgenLines, err error) {
 	f, err := os.Open(filename)
 	if err != nil {
 		return
@@ -152,24 +185,26 @@ func readFile(filename string) (result colgenLines, err error) {
 
 	s := bufio.NewScanner(f)
 	for s.Scan() {
-		//TODO(sergeyfast):remove
-		if strings.HasPrefix(s.Text(), "package ") {
-			result.pkgName = strings.TrimPrefix(s.Text(), "package ")
+		line := s.Text()
+		// is it possible to get package from gopackages, but we will do it in simple way.
+		if strings.HasPrefix(line, "package ") {
+			result.pkgName = strings.TrimPrefix(line, "package ")
 		}
 
+		switch {
+		// find assistant lines
+		case withAssistant && strings.HasPrefix(line, colgen.AssistantPrefix):
+			if l, ok := strings.CutPrefix(line, colgen.AssistantPrefix); ok {
+				result.assistant = append(result.assistant, l)
+			}
 		// find injection lines
-		if strings.HasPrefix(s.Text(), colgen.InjectionPrefix) {
-			result.injection = append(result.injection, s.Text())
-		}
-
+		case strings.HasPrefix(line, colgen.InjectionPrefix):
+			result.injection = append(result.injection, line)
 		// find normal lines
-		if !strings.HasPrefix(s.Text(), colgen.ColgenPrefix) {
-			continue
-		}
-
-		l, ok := strings.CutPrefix(s.Text(), colgen.ColgenPrefix)
-		if ok {
-			result.lines = append(result.lines, l)
+		case strings.HasPrefix(line, colgen.ColgenPrefix):
+			if l, ok := strings.CutPrefix(line, colgen.ColgenPrefix); ok {
+				result.lines = append(result.lines, l)
+			}
 		}
 	}
 
@@ -179,4 +214,25 @@ func readFile(filename string) (result colgenLines, err error) {
 // baseName returns baseName from path without extension.
 func baseName(path string) string {
 	return strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+}
+
+// appVersion returns app version from VCS info.
+func appVersion() string {
+	result := "devel"
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return result
+	}
+
+	for _, v := range info.Settings {
+		if v.Key == "vcs.revision" {
+			result = v.Value
+		}
+	}
+
+	if len(result) > 8 {
+		result = result[:8]
+	}
+
+	return result
 }
