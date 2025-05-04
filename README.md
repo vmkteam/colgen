@@ -12,7 +12,7 @@ Colgen is a powerful Go code generation tool that automates the creation of coll
     - Field value collectors
     - Unique field value collectors
     - Converters and Index functions
-- AI-assisted review/readme generation
+- AI-assisted review/readme/tests generation
 - Code injection capabilities
 - Customizable through command-line flags
 
@@ -37,12 +37,12 @@ go install github.com/vmkteam/colgen@latest
 
 ### Command Line Flags
 
-| Flag        | Description                                      | Default |
-|-------------|--------------------------------------------------|---------|
-| `-list`     | Use "List" suffix for collections               | false   |
-| `-imports`  | Custom import paths (comma-separated)           | ""      |
-| `-funcpkg`  | Package for Map & MapP functions                | ""      |
-| `-ai`       | API key for AI-assisted documentation          | ""      |
+| Flag         | Description                           | Default |
+|--------------|---------------------------------------|---------|
+| `-list`      | Use "List" suffix for collections     | false   |
+| `-imports`   | Custom import paths (comma-separated) | ""      |
+| `-funcpkg`   | Package for Map & MapP functions      | ""      |
+| `-write-key` | Write assistant key to homedir        | ""      |
 
 ## Generation Modes
 
@@ -70,7 +70,9 @@ For `//colgen:<struct>,<struct>,...`:
 ```
 #### AI Assistance
 
+`colgen -write-key=<deepseek key>`
+
 ```go
-//go:generate colgen -ai=YOUR_API_KEY
-//colgen@ai:<readme|review>
+//go:generate colgen 
+//colgen@ai:<readme|review|tests>
 ```

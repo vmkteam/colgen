@@ -33,6 +33,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -43,15 +44,25 @@ import (
 	"time"
 
 	"github.com/vmkteam/colgen/pkg/colgen"
+
+	"github.com/BurntSushi/toml"
 )
 
 var (
-	flList         = flag.Bool("list", false, "use List suffix for collection")
-	flImports      = flag.String("imports", "", "use custom imports: e.g pkg/db, pkg/domain")
-	flFuncPkg      = flag.String("funcpkg", "", "use funcpkg for Map & MapP functions")
-	flAssistantKey = flag.String("ai", "", "use deepseek assistant assistant, provide api key")
-	flVersion      = flag.Bool("v", false, "print version and exit")
+	flList     = flag.Bool("list", false, "use List suffix for collection")
+	flImports  = flag.String("imports", "", "use custom imports: e.g pkg/db, pkg/domain")
+	flFuncPkg  = flag.String("funcpkg", "", "use funcpkg for Map & MapP functions")
+	flWriteKey = flag.String("write-key", "", "write assistant key to ~/.colgen file")
+	flVersion  = flag.Bool("v", false, "print version and exit")
 )
+
+const (
+	configFile = ".colgen"
+)
+
+type Config struct {
+	Key string
+}
 
 func exitOnErr(err error) {
 	if err != nil {
@@ -63,10 +74,19 @@ func main() {
 	log.SetFlags(log.Lshortfile)
 	flag.Parse()
 
-	if *flVersion {
+	switch {
+	case *flVersion:
 		fmt.Printf("colgen version: %v\n", appVersion())
-		os.Exit(0)
+		return // quit
+	case *flWriteKey != "":
+		err := writeConfig(*flWriteKey)
+		exitOnErr(err)
+		return // quits
 	}
+
+	// read config
+	cfg, err := readConfig()
+	exitOnErr(err)
 
 	// set filename from go:generate
 	filename := os.Getenv("GOFILE")
@@ -75,14 +95,14 @@ func main() {
 	}
 
 	// get colgen lines from file
-	cl, err := readFile(filename, *flAssistantKey != "")
+	cl, err := readFile(filename, cfg.Key != "")
 	exitOnErr(err)
 
 	// if assistant was found, process only one instruction
 	if len(cl.assistant) > 0 {
 		now := time.Now()
 		log.Println("assisting: ", cl.assistant[0])
-		assistFile(cl.assistant[0], filename)
+		assistFile(cfg.Key, cl.assistant[0], filename)
 		log.Println("assisting done", time.Since(now))
 		return
 	}
@@ -99,22 +119,46 @@ func main() {
 	generateFile(cl, filename)
 }
 
-func assistFile(assistPrompt, filename string) {
-	aa := colgen.NewAssistant(*flAssistantKey)
+func assistFile(key, assistPrompt, filename string) {
+	aa := colgen.NewAssistant(key)
+	am := colgen.AssistMode(assistPrompt)
 
-	if err := aa.IsValidMode(assistPrompt); err != nil {
+	if err := aa.IsValidMode(am); err != nil {
 		exitOnErr(err)
 	}
 
 	content, err := os.ReadFile(filename)
 	exitOnErr(err)
 
-	r, err := aa.Generate(assistPrompt, string(content))
-	exitOnErr(err)
+	// normal cases
+	if am != colgen.ModeTests {
+		r, err := aa.Generate(am, string(content))
+		exitOnErr(err)
 
-	// write file
-	err = os.WriteFile(filename+".md", []byte(r), os.ModePerm)
-	exitOnErr(err)
+		// write file
+		err = os.WriteFile(filename+".md", []byte(r), os.ModePerm)
+		exitOnErr(err)
+	} else { // tests
+		tp, err := colgen.UserPromptForTests(content, filename)
+		exitOnErr(err)
+
+		r, err := aa.Generate(am, tp.TestPrompt)
+		exitOnErr(err)
+
+		if tp.AppendToFile {
+			file, er := os.OpenFile(tp.TestFilename, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
+			exitOnErr(er)
+			defer file.Close()
+
+			_, er = file.WriteString(r)
+			exitOnErr(er)
+			return
+		}
+
+		// full
+		err = os.WriteFile(tp.TestFilename, []byte(r), os.ModePerm)
+		exitOnErr(err)
+	}
 }
 
 func replaceFile(cl colgenLines, filename string) {
@@ -235,4 +279,51 @@ func appVersion() string {
 	}
 
 	return result
+}
+
+// writeConfig creates config in home dir.
+func writeConfig(key string) error {
+	cp, err := configPath()
+	if err != nil {
+		return err
+	}
+
+	var buf bytes.Buffer
+	enc := toml.NewEncoder(&buf)
+	if err := enc.Encode(Config{Key: key}); err != nil {
+		return fmt.Errorf("create config failed: %w", err)
+	}
+
+	if err := os.WriteFile(cp, buf.Bytes(), 0600); err != nil {
+		return fmt.Errorf("write config to %s failed: %w", cp, err)
+	}
+
+	return nil
+}
+
+// configPath gets config path.
+func configPath() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+
+	path := filepath.Join(homeDir, configFile)
+	return path, nil
+}
+
+// readConfig reads default config from home dir.
+func readConfig() (Config, error) {
+	cp, err := configPath()
+	var cfg Config
+	if err != nil {
+		return cfg, err
+	}
+
+	if _, err = os.Stat(cp); errors.Is(err, os.ErrNotExist) {
+		return cfg, nil
+	}
+
+	_, err = toml.DecodeFile(cp, &cfg)
+	return cfg, err
 }

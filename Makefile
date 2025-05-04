@@ -19,3 +19,5 @@ mod:
 
 install: build
 	@cp colgen ~/go/bin
+
+all: fmt lint build install
