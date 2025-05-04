@@ -33,20 +33,36 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
+	"time"
 
 	"github.com/vmkteam/colgen/pkg/colgen"
+
+	"github.com/BurntSushi/toml"
 )
 
 var (
-	flList    = flag.Bool("list", false, "use List suffix for collection")
-	flImports = flag.String("imports", "", "use custom imports: e.g pkg/db, pkg/domain")
-	flFuncPkg = flag.String("funcpkg", "", "use funcpkg for Map & MapP functions")
+	flList     = flag.Bool("list", false, "use List suffix for collection")
+	flImports  = flag.String("imports", "", "use custom imports: e.g pkg/db, pkg/domain")
+	flFuncPkg  = flag.String("funcpkg", "", "use funcpkg for Map & MapP functions")
+	flWriteKey = flag.String("write-key", "", "write assistant key to ~/.colgen file")
+	flVersion  = flag.Bool("v", false, "print version and exit")
 )
+
+const (
+	configFile = ".colgen"
+)
+
+type Config struct {
+	Key string
+}
 
 func exitOnErr(err error) {
 	if err != nil {
@@ -58,10 +74,19 @@ func main() {
 	log.SetFlags(log.Lshortfile)
 	flag.Parse()
 
-	args := flag.Args()
-	if len(args) == 0 {
-		args = []string{"."}
+	switch {
+	case *flVersion:
+		fmt.Printf("colgen version: %v\n", appVersion())
+		return // quit
+	case *flWriteKey != "":
+		err := writeConfig(*flWriteKey)
+		exitOnErr(err)
+		return // quits
 	}
+
+	// read config
+	cfg, err := readConfig()
+	exitOnErr(err)
 
 	// set filename from go:generate
 	filename := os.Getenv("GOFILE")
@@ -70,8 +95,17 @@ func main() {
 	}
 
 	// get colgen lines from file
-	cl, err := readFile(filename)
+	cl, err := readFile(filename, cfg.Key != "")
 	exitOnErr(err)
+
+	// if assistant was found, process only one instruction
+	if len(cl.assistant) > 0 {
+		now := time.Now()
+		log.Println("assisting: ", cl.assistant[0])
+		assistFile(cfg.Key, cl.assistant[0], filename)
+		log.Println("assisting done", time.Since(now))
+		return
+	}
 
 	if len(cl.injection) > 0 {
 		log.Println("replacing injections")
@@ -83,6 +117,48 @@ func main() {
 		return
 	}
 	generateFile(cl, filename)
+}
+
+func assistFile(key, assistPrompt, filename string) {
+	aa := colgen.NewAssistant(key)
+	am := colgen.AssistMode(assistPrompt)
+
+	if err := aa.IsValidMode(am); err != nil {
+		exitOnErr(err)
+	}
+
+	content, err := os.ReadFile(filename)
+	exitOnErr(err)
+
+	// normal cases
+	if am != colgen.ModeTests {
+		r, err := aa.Generate(am, string(content))
+		exitOnErr(err)
+
+		// write file
+		err = os.WriteFile(filename+".md", []byte(r), os.ModePerm)
+		exitOnErr(err)
+	} else { // tests
+		tp, err := colgen.UserPromptForTests(content, filename)
+		exitOnErr(err)
+
+		r, err := aa.Generate(am, tp.TestPrompt)
+		exitOnErr(err)
+
+		if tp.AppendToFile {
+			file, er := os.OpenFile(tp.TestFilename, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
+			exitOnErr(er)
+			defer file.Close()
+
+			_, er = file.WriteString(r)
+			exitOnErr(er)
+			return
+		}
+
+		// full
+		err = os.WriteFile(tp.TestFilename, []byte(r), os.ModePerm)
+		exitOnErr(err)
+	}
 }
 
 func replaceFile(cl colgenLines, filename string) {
@@ -110,7 +186,7 @@ func replaceFile(cl colgenLines, filename string) {
 
 func generateFile(cl colgenLines, filename string) {
 	// init generator and rules
-	g := colgen.NewGenerator(cl.pkgName, *flImports, *flFuncPkg)
+	g := colgen.NewGenerator(cl.pkgName, *flImports, *flFuncPkg, appVersion())
 	rules, err := colgen.ParseRules(cl.lines, *flList)
 	exitOnErr(err)
 
@@ -139,11 +215,12 @@ func generateFile(cl colgenLines, filename string) {
 type colgenLines struct {
 	lines     []string
 	injection []string
+	assistant []string
 	pkgName   string
 }
 
 // readFile parses file line by line and returns all colgen lines without prefix.
-func readFile(filename string) (result colgenLines, err error) {
+func readFile(filename string, withAssistant bool) (result colgenLines, err error) {
 	f, err := os.Open(filename)
 	if err != nil {
 		return
@@ -152,24 +229,26 @@ func readFile(filename string) (result colgenLines, err error) {
 
 	s := bufio.NewScanner(f)
 	for s.Scan() {
-		//TODO(sergeyfast):remove
-		if strings.HasPrefix(s.Text(), "package ") {
-			result.pkgName = strings.TrimPrefix(s.Text(), "package ")
+		line := s.Text()
+		// is it possible to get package from gopackages, but we will do it in simple way.
+		if strings.HasPrefix(line, "package ") {
+			result.pkgName = strings.TrimPrefix(line, "package ")
 		}
 
+		switch {
+		// find assistant lines
+		case withAssistant && strings.HasPrefix(line, colgen.AssistantPrefix):
+			if l, ok := strings.CutPrefix(line, colgen.AssistantPrefix); ok {
+				result.assistant = append(result.assistant, l)
+			}
 		// find injection lines
-		if strings.HasPrefix(s.Text(), colgen.InjectionPrefix) {
-			result.injection = append(result.injection, s.Text())
-		}
-
+		case strings.HasPrefix(line, colgen.InjectionPrefix):
+			result.injection = append(result.injection, line)
 		// find normal lines
-		if !strings.HasPrefix(s.Text(), colgen.ColgenPrefix) {
-			continue
-		}
-
-		l, ok := strings.CutPrefix(s.Text(), colgen.ColgenPrefix)
-		if ok {
-			result.lines = append(result.lines, l)
+		case strings.HasPrefix(line, colgen.ColgenPrefix):
+			if l, ok := strings.CutPrefix(line, colgen.ColgenPrefix); ok {
+				result.lines = append(result.lines, l)
+			}
 		}
 	}
 
@@ -179,4 +258,76 @@ func readFile(filename string) (result colgenLines, err error) {
 // baseName returns baseName from path without extension.
 func baseName(path string) string {
 	return strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+}
+
+// appVersion returns app version from VCS info.
+func appVersion() string {
+	result := "devel"
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return result
+	}
+
+	if info.Main.Version != "" {
+		return info.Main.Version
+	}
+
+	for _, v := range info.Settings {
+		if v.Key == "vcs.revision" {
+			result = v.Value
+		}
+	}
+
+	if len(result) > 8 {
+		result = result[:8]
+	}
+
+	return result
+}
+
+// writeConfig creates config in home dir.
+func writeConfig(key string) error {
+	cp, err := configPath()
+	if err != nil {
+		return err
+	}
+
+	var buf bytes.Buffer
+	enc := toml.NewEncoder(&buf)
+	if err := enc.Encode(Config{Key: key}); err != nil {
+		return fmt.Errorf("create config failed: %w", err)
+	}
+
+	if err := os.WriteFile(cp, buf.Bytes(), 0600); err != nil {
+		return fmt.Errorf("write config to %s failed: %w", cp, err)
+	}
+
+	return nil
+}
+
+// configPath gets config path.
+func configPath() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+
+	path := filepath.Join(homeDir, configFile)
+	return path, nil
+}
+
+// readConfig reads default config from home dir.
+func readConfig() (Config, error) {
+	cp, err := configPath()
+	var cfg Config
+	if err != nil {
+		return cfg, err
+	}
+
+	if _, err = os.Stat(cp); errors.Is(err, os.ErrNotExist) {
+		return cfg, nil
+	}
+
+	_, err = toml.DecodeFile(cp, &cfg)
+	return cfg, err
 }

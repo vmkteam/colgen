@@ -1,16 +1,23 @@
 PKG := `go list -f {{.Dir}} ./...`
 
 fmt:
-	@goimports -local "github.com/vmkteam/mfd-generator" -l -w $(PKG)
+	@golangci-lint fmt
 
 lint:
-	@golangci-lint run -c .golangci.yml
+	@golangci-lint version
+	@#golangci-lint config verify
+	@golangci-lint run
 
 test:
 	@go test -v ./...
 
 build:
-	@go build cmd/colgen/colgen.go
+	@go build github.com/vmkteam/colgen/cmd/colgen
 
 mod:
 	@go mod tidy
+
+install: build
+	@cp colgen ~/go/bin
+
+all: fmt lint build install

@@ -1,6 +1,6 @@
 package colgen
 
-// test types
+// test types.
 type (
 	Category struct {
 		ID int
