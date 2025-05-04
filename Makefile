@@ -12,7 +12,7 @@ test:
 	@go test -v ./...
 
 build:
-	@go build cmd/colgen/colgen.go
+	@go build github.com/vmkteam/colgen/cmd/colgen
 
 mod:
 	@go mod tidy

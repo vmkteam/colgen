@@ -268,6 +268,10 @@ func appVersion() string {
 		return result
 	}
 
+	if info.Main.Version != "" {
+		return info.Main.Version
+	}
+
 	for _, v := range info.Settings {
 		if v.Key == "vcs.revision" {
 			result = v.Value

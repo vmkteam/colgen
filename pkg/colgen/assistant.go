@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/go-deepseek/deepseek"
+	"github.com/go-deepseek/deepseek/config"
 	"github.com/go-deepseek/deepseek/request"
 )
 
@@ -143,7 +144,11 @@ func testFilename(filename string) string {
 }
 
 func (a *Assistant) call(c Code) (string, error) {
-	client, err := deepseek.NewClient(a.key)
+	const callTimeout = 300
+	client, err := deepseek.NewClientWithConfig(config.Config{
+		ApiKey:         a.key,
+		TimeoutSeconds: callTimeout,
+	})
 	if err != nil {
 		return "", err
 	}
