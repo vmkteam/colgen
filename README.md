@@ -19,7 +19,7 @@ Colgen is a powerful Go code generation tool that automates the creation of coll
 ## Installation
 
 ```sh
-go install github.com/vmkteam/colgen@latest
+go install github.com/vmkteam/colgen/cmd/colgen@latest
 ```
 
 ## Usage
