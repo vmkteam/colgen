@@ -70,6 +70,8 @@ For `//colgen:<struct>,<struct>,...`:
 ```
 #### AI Assistance
 
+[//]: # (TODO: claude)
+
 `colgen -write-key=<deepseek key>`
 
 ```go

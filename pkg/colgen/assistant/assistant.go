@@ -1,24 +1,22 @@
-// Package colgen provides AI-assisted code generation and review capabilities.
-// It integrates with Deepseek's API to generate code reviews and README content.
+// Package assistant provides AI-assisted code generation and review capabilities.
+// It integrates with several AI assistants, like DeepSeek's, Claude's API to generate code reviews and README content.
 //
 //	//colgen@ai:<review|readme|tests>
-package colgen
+package assistant
 
 import (
-	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/go-deepseek/deepseek"
-	"github.com/go-deepseek/deepseek/config"
-	"github.com/go-deepseek/deepseek/request"
 )
 
-// AssistMode represents the type of AI assistance to provide.
-type AssistMode string
+// AssistName represents the name of AI assistance.
+type AssistName string
+
+func (an AssistName) String() string {
+	return string(an)
+}
 
 const (
 	// ModeReview requests a code review of the provided content.
@@ -30,71 +28,30 @@ const (
 	ModeTests AssistMode = "tests"
 )
 
+// AssistMode represents the type of AI assistance to provide.
+type AssistMode string
+
+func (am AssistMode) IsTest() bool {
+	return am == ModeTests
+}
+
 var ErrUnsupportedAssistMode = errors.New("unsupported assist mode")
 
-// Assistant provides AI-assisted code generation capabilities.
-// It requires a valid Deepseek API key for initialization.
-type Assistant struct {
-	key string
-}
+type Assistant interface {
+	// Generate produces either a code review or README based on the assistPrompt.
+	// Returns the generated content or an error if the request fails.
+	Generate(am AssistMode, content string) (code string, err error)
 
-// NewAssistant creates a new Assistant instance with the provided API key.
-// The key should be a valid Deepseek API key.
-func NewAssistant(key string) *Assistant {
-	return &Assistant{
-		key: key,
-	}
-}
-
-// IsValidMode checks if the provided mode string is a valid assistance mode.
-// Valid modes are "review" and "readme".
-// Returns ErrUnsupportedAssistMode if the mode is invalid.
-func (a *Assistant) IsValidMode(mode AssistMode) error {
-	switch mode {
-	case ModeReview, ModeReadme, ModeTests:
-		return nil
-	}
-
-	return fmt.Errorf("%w: %s", ErrUnsupportedAssistMode, mode)
+	// IsValidMode checks if the provided mode string is a valid assistance mode.
+	// Valid modes are "review" and "readme".
+	// Returns ErrUnsupportedAssistMode if the mode is invalid.
+	IsValidMode(mode AssistMode) error
 }
 
 // Code represents the input for AI generation, containing both
 // a system prompt (context/instructions) and user prompt (content to process).
 type Code struct {
 	SystemPrompt, Prompt string
-}
-
-// Generate produces either a code review or README based on the assistPrompt.
-// Returns the generated content or an error if the request fails.
-func (a *Assistant) Generate(am AssistMode, content string) (code string, err error) {
-	switch am {
-	case ModeReadme:
-		code, err = a.Readme(content)
-	case ModeReview:
-		code, err = a.Review(content)
-	case ModeTests:
-		code, err = a.Tests(content)
-	default:
-		err = fmt.Errorf("%w: %s", ErrUnsupportedAssistMode, am)
-	}
-
-	return
-}
-
-// Review generates a code review for the provided Go code.
-// Returns the review as Markdown text or an error if the request fails.
-func (a *Assistant) Review(code string) (string, error) {
-	return a.call(Code{SystemPrompt: systemPromptReview, Prompt: code})
-}
-
-// Readme generates a README for the provided Go code.
-// Returns the README as Markdown text or an error if the request fails.
-func (a *Assistant) Readme(code string) (string, error) {
-	return a.call(Code{SystemPrompt: systemPromptReadme, Prompt: code})
-}
-
-func (a *Assistant) Tests(code string) (string, error) {
-	return a.call(Code{SystemPrompt: systemPromptTests, Prompt: code})
 }
 
 type UserTestPrompt struct {
@@ -141,39 +98,6 @@ func testFilename(filename string) string {
 	name := strings.TrimSuffix(base, ".go")
 
 	return filepath.Join(dir, name+"_test.go")
-}
-
-func (a *Assistant) call(c Code) (string, error) {
-	const callTimeout = 300
-	client, err := deepseek.NewClientWithConfig(config.Config{
-		ApiKey:         a.key,
-		TimeoutSeconds: callTimeout,
-	})
-	if err != nil {
-		return "", err
-	}
-
-	temperature := float32(0)
-	chatReq := &request.ChatCompletionsRequest{
-		Messages: []*request.Message{
-			{
-				Role:    "system",
-				Content: c.SystemPrompt,
-			},
-			{
-				Role:    "user",
-				Content: c.Prompt,
-			},
-		},
-		Model:       deepseek.DEEPSEEK_CHAT_MODEL,
-		Temperature: &temperature,
-	}
-
-	chatResp, err := client.CallChatCompletionsChat(context.Background(), chatReq)
-	if err != nil {
-		return "", err
-	}
-	return chatResp.Choices[0].Message.Content, nil
 }
 
 const systemPromptReview = `You are a professional Go developer and testing expert.
