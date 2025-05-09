@@ -44,24 +44,45 @@ import (
 	"time"
 
 	"github.com/vmkteam/colgen/pkg/colgen"
+	"github.com/vmkteam/colgen/pkg/colgen/assistant"
 
 	"github.com/BurntSushi/toml"
 )
 
 var (
-	flList     = flag.Bool("list", false, "use List suffix for collection")
-	flImports  = flag.String("imports", "", "use custom imports: e.g pkg/db, pkg/domain")
-	flFuncPkg  = flag.String("funcpkg", "", "use funcpkg for Map & MapP functions")
-	flWriteKey = flag.String("write-key", "", "write assistant key to ~/.colgen file")
-	flVersion  = flag.Bool("v", false, "print version and exit")
+	flList      = flag.Bool("list", false, "use List suffix for collection")
+	flImports   = flag.String("imports", "", "use custom imports: e.g pkg/db, pkg/domain")
+	flFuncPkg   = flag.String("funcpkg", "", "use funcpkg for Map & MapP functions")
+	flWriteKey  = flag.String("write-key", "", "write assistant key to ~/.colgen file")
+	flAssistant = flag.String("ai", "", "use it to redefining assistant while writing a key to ~/.colgen file")
+	flVersion   = flag.Bool("v", false, "print version and exit")
 )
 
 const (
-	configFile = ".colgen"
+	configFile    = ".colgen"
+	defaultAssist = assistant.DeepseekName
 )
 
 type Config struct {
-	Key string
+	DeepSeekKey string
+	ClaudeKey   string
+}
+
+func (cfg *Config) fillByAssistName(name assistant.AssistName, key string) error {
+	if cfg == nil {
+		return errors.New("nil config")
+	}
+
+	switch name {
+	case assistant.DeepseekName:
+		cfg.DeepSeekKey = key
+	case assistant.ClaudeName:
+		cfg.ClaudeKey = key
+	default:
+		return fmt.Errorf("unknown assistant name=%s", name)
+	}
+
+	return nil
 }
 
 func exitOnErr(err error) {
@@ -79,7 +100,11 @@ func main() {
 		fmt.Printf("colgen version: %v\n", appVersion())
 		return // quit
 	case *flWriteKey != "":
-		err := writeConfig(*flWriteKey)
+		assistName := defaultAssist
+		if *flAssistant != "" {
+			assistName = assistant.AssistName(*flAssistant)
+		}
+		err := writeConfig(*flWriteKey, assistName)
 		exitOnErr(err)
 		return // quits
 	}
@@ -95,14 +120,14 @@ func main() {
 	}
 
 	// get colgen lines from file
-	cl, err := readFile(filename, cfg.Key != "")
+	cl, err := readFile(filename)
 	exitOnErr(err)
 
 	// if assistant was found, process only one instruction
 	if len(cl.assistant) > 0 {
 		now := time.Now()
 		log.Println("assisting: ", cl.assistant[0])
-		assistFile(cfg.Key, cl.assistant[0], filename)
+		assistFile(cfg, cl.assistant[0], filename)
 		log.Println("assisting done", time.Since(now))
 		return
 	}
@@ -119,19 +144,38 @@ func main() {
 	generateFile(cl, filename)
 }
 
-func assistFile(key, assistPrompt, filename string) {
-	aa := colgen.NewAssistant(key)
-	am := colgen.AssistMode(assistPrompt)
+func assistFile(cfg Config, assistParams, filename string) {
+	// split params by comma
+	params := strings.Split(assistParams, ",")
+	if len(params) == 0 { // return an err if it doesn't have mode or name + mode
+		exitOnErr(errors.New("assist params is empty"))
+	}
 
+	// use default assistant and mode
+	an := defaultAssist.String()
+	am := assistant.AssistMode(params[0])
+	if len(params) > 1 {
+		an = params[0] // But if it provides more than 1 param, read assistant name from the first param
+		am = assistant.AssistMode(params[1])
+	}
+
+	// choose a certain assistant
+	aa := assistByName(assistant.AssistName(an), cfg)
+	if aa == nil {
+		exitOnErr(fmt.Errorf("unknown assistant: %q", params[0]))
+	}
+
+	// check assistant mode
 	if err := aa.IsValidMode(am); err != nil {
 		exitOnErr(err)
 	}
 
+	// read file
 	content, err := os.ReadFile(filename)
 	exitOnErr(err)
 
 	// normal cases
-	if am != colgen.ModeTests {
+	if !am.IsTest() {
 		r, err := aa.Generate(am, string(content))
 		exitOnErr(err)
 
@@ -139,7 +183,7 @@ func assistFile(key, assistPrompt, filename string) {
 		err = os.WriteFile(filename+".md", []byte(r), os.ModePerm)
 		exitOnErr(err)
 	} else { // tests
-		tp, err := colgen.UserPromptForTests(content, filename)
+		tp, err := assistant.UserPromptForTests(content, filename)
 		exitOnErr(err)
 
 		r, err := aa.Generate(am, tp.TestPrompt)
@@ -159,6 +203,18 @@ func assistFile(key, assistPrompt, filename string) {
 		err = os.WriteFile(tp.TestFilename, []byte(r), os.ModePerm)
 		exitOnErr(err)
 	}
+}
+
+func assistByName(name assistant.AssistName, cfg Config) assistant.Assistant {
+	var aa assistant.Assistant
+	switch name {
+	case assistant.DeepseekName:
+		aa = assistant.NewDeepSeek(cfg.DeepSeekKey)
+	case assistant.ClaudeName:
+		aa = assistant.NewClaude(cfg.ClaudeKey)
+	}
+
+	return aa
 }
 
 func replaceFile(cl colgenLines, filename string) {
@@ -220,7 +276,7 @@ type colgenLines struct {
 }
 
 // readFile parses file line by line and returns all colgen lines without prefix.
-func readFile(filename string, withAssistant bool) (result colgenLines, err error) {
+func readFile(filename string) (result colgenLines, err error) {
 	f, err := os.Open(filename)
 	if err != nil {
 		return
@@ -237,7 +293,7 @@ func readFile(filename string, withAssistant bool) (result colgenLines, err erro
 
 		switch {
 		// find assistant lines
-		case withAssistant && strings.HasPrefix(line, colgen.AssistantPrefix):
+		case strings.HasPrefix(line, colgen.AssistantPrefix):
 			if l, ok := strings.CutPrefix(line, colgen.AssistantPrefix); ok {
 				result.assistant = append(result.assistant, l)
 			}
@@ -286,7 +342,16 @@ func appVersion() string {
 }
 
 // writeConfig creates config in home dir.
-func writeConfig(key string) error {
+func writeConfig(key string, assistName assistant.AssistName) error {
+	cfg, err := readConfig()
+	if err != nil {
+		return fmt.Errorf("reading config: %w", err)
+	}
+
+	if err = cfg.fillByAssistName(assistName, key); err != nil {
+		return err
+	}
+
 	cp, err := configPath()
 	if err != nil {
 		return err
@@ -294,7 +359,7 @@ func writeConfig(key string) error {
 
 	var buf bytes.Buffer
 	enc := toml.NewEncoder(&buf)
-	if err := enc.Encode(Config{Key: key}); err != nil {
+	if err := enc.Encode(cfg); err != nil {
 		return fmt.Errorf("create config failed: %w", err)
 	}
 
