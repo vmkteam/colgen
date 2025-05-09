@@ -30,6 +30,9 @@
 // //colgen@newUserSummary(newsportal.User,full,json)
 package main
 
+//go:generate colgen
+//colgen@ai:review
+
 import (
 	"bufio"
 	"bytes"
@@ -49,11 +52,12 @@ import (
 )
 
 var (
-	flList     = flag.Bool("list", false, "use List suffix for collection")
-	flImports  = flag.String("imports", "", "use custom imports: e.g pkg/db, pkg/domain")
-	flFuncPkg  = flag.String("funcpkg", "", "use funcpkg for Map & MapP functions")
-	flWriteKey = flag.String("write-key", "", "write assistant key to ~/.colgen file")
-	flVersion  = flag.Bool("v", false, "print version and exit")
+	flList      = flag.Bool("list", false, "use List suffix for collection")
+	flImports   = flag.String("imports", "", "use custom imports: e.g pkg/db, pkg/domain")
+	flFuncPkg   = flag.String("funcpkg", "", "use funcpkg for Map & MapP functions")
+	flWriteKey  = flag.String("write-key", "", "write assistant key to ~/.colgen file")
+	flAssistant = flag.String("ai", "", "use it to redefining assistant while writing a key to ~/.colgen file")
+	flVersion   = flag.Bool("v", false, "print version and exit")
 )
 
 const (
@@ -61,7 +65,36 @@ const (
 )
 
 type Config struct {
-	Key string
+	DeepSeekKey string
+	ClaudeKey   string
+	Assistant   colgen.AssistantName
+}
+
+func NewConfig(key string, name colgen.AssistantName) Config {
+	cfg := Config{
+		Assistant: name,
+	}
+	switch name {
+	case colgen.AssistantDeepSeek:
+		cfg.DeepSeekKey = key
+	case colgen.AssistantClaude:
+		cfg.ClaudeKey = key
+	default:
+		panic("invalid assistant name")
+	}
+
+	return cfg
+}
+
+func (cfg Config) Key() string {
+	switch cfg.Assistant {
+	case colgen.AssistantDeepSeek:
+		return cfg.DeepSeekKey
+	case colgen.AssistantClaude:
+		return cfg.ClaudeKey
+	}
+
+	return ""
 }
 
 func exitOnErr(err error) {
@@ -79,13 +112,13 @@ func main() {
 		fmt.Printf("colgen version: %v\n", appVersion())
 		return // quit
 	case *flWriteKey != "":
-		err := writeConfig(*flWriteKey)
+		err := writeConfig(*flWriteKey, colgen.AssistantName(*flAssistant))
 		exitOnErr(err)
 		return // quits
 	}
 
 	// read config
-	cfg, err := readConfig()
+	cfg, err := readConfig(*flAssistant)
 	exitOnErr(err)
 
 	// set filename from go:generate
@@ -95,14 +128,14 @@ func main() {
 	}
 
 	// get colgen lines from file
-	cl, err := readFile(filename, cfg.Key != "")
+	cl, err := readFile(filename, cfg.Assistant != "")
 	exitOnErr(err)
 
 	// if assistant was found, process only one instruction
 	if len(cl.assistant) > 0 {
 		now := time.Now()
 		log.Println("assisting: ", cl.assistant[0])
-		assistFile(cfg.Key, cl.assistant[0], filename)
+		assistFile(cfg, cl.assistant[0], filename)
 		log.Println("assisting done", time.Since(now))
 		return
 	}
@@ -119,8 +152,8 @@ func main() {
 	generateFile(cl, filename)
 }
 
-func assistFile(key, assistPrompt, filename string) {
-	aa := colgen.NewAssistant(key)
+func assistFile(cfg Config, assistPrompt, filename string) {
+	aa := colgen.NewAssistant(cfg.Assistant, cfg.Key())
 	am := colgen.AssistMode(assistPrompt)
 
 	if err := aa.IsValidMode(am); err != nil {
@@ -286,15 +319,19 @@ func appVersion() string {
 }
 
 // writeConfig creates config in home dir.
-func writeConfig(key string) error {
+func writeConfig(key string, name colgen.AssistantName) error {
 	cp, err := configPath()
 	if err != nil {
 		return err
 	}
 
+	if name == "" {
+		name = colgen.AssistantDeepSeek
+	}
+
 	var buf bytes.Buffer
 	enc := toml.NewEncoder(&buf)
-	if err := enc.Encode(Config{Key: key}); err != nil {
+	if err := enc.Encode(NewConfig(key, name)); err != nil {
 		return fmt.Errorf("create config failed: %w", err)
 	}
 
@@ -317,7 +354,7 @@ func configPath() (string, error) {
 }
 
 // readConfig reads default config from home dir.
-func readConfig() (Config, error) {
+func readConfig(flAssistant string) (Config, error) {
 	cp, err := configPath()
 	var cfg Config
 	if err != nil {
@@ -329,5 +366,10 @@ func readConfig() (Config, error) {
 	}
 
 	_, err = toml.DecodeFile(cp, &cfg)
+
+	if flAssistant != "" {
+		cfg.Assistant = colgen.AssistantName(flAssistant)
+	}
+
 	return cfg, err
 }
