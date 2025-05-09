@@ -77,12 +77,10 @@ func (a *Claude) call(c Code) (string, error) {
 	const callTimeout = 300 * time.Second
 	client := anthropic.NewClient(option.WithAPIKey(a.key), option.WithRequestTimeout(callTimeout), option.WithEnvironmentProduction())
 	message, err := client.Messages.New(context.Background(), anthropic.MessageNewParams{
+		System: []anthropic.TextBlockParam{
+			{Text: c.SystemPrompt},
+		},
 		Messages: []anthropic.MessageParam{
-			anthropic.NewUserMessage(
-				[]anthropic.ContentBlockParamUnion{
-					{OfRequestTextBlock: &anthropic.TextBlockParam{Text: c.SystemPrompt}},
-				}...,
-			),
 			anthropic.NewUserMessage(
 				[]anthropic.ContentBlockParamUnion{
 					{OfRequestTextBlock: &anthropic.TextBlockParam{Text: c.Prompt}},
