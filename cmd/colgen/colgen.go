@@ -49,21 +49,57 @@ import (
 )
 
 var (
-	flList     = flag.Bool("list", false, "use List suffix for collection")
-	flImports  = flag.String("imports", "", "use custom imports: e.g pkg/db, pkg/domain")
-	flFuncPkg  = flag.String("funcpkg", "", "use funcpkg for Map & MapP functions")
-	flWriteKey = flag.String("write-key", "", "write assistant key to ~/.colgen file")
-	flVersion  = flag.Bool("v", false, "print version and exit")
+	flList      = flag.Bool("list", false, "use List suffix for collection")
+	flImports   = flag.String("imports", "", "use custom imports: e.g pkg/db, pkg/domain")
+	flFuncPkg   = flag.String("funcpkg", "", "use funcpkg for Map & MapP functions")
+	flWriteKey  = flag.String("write-key", "", "write assistant key to ~/.colgen file")
+	flAssistant = flag.String("ai", "", "use it to redefining assistant while writing a key to ~/.colgen file")
+	flVersion   = flag.Bool("v", false, "print version and exit")
 )
 
 const (
 	configFile = ".colgen"
 )
 
+// Config represents the configuration for colgen tool including API keys for different assistants.
 type Config struct {
-	Key string
+	DeepSeekKey string
+	ClaudeKey   string
 }
 
+// fillByName sets the API key for the specified assistant name.
+// Returns error if config is nil or assistant name is unknown.
+func (cfg *Config) fillByName(name colgen.AssistantName, key string) error {
+	if cfg == nil {
+		return errors.New("nil config")
+	}
+
+	switch name {
+	case colgen.AssistantDeepSeek:
+		cfg.DeepSeekKey = key
+	case colgen.AssistantClaude:
+		cfg.ClaudeKey = key
+	default:
+		return fmt.Errorf("unknown assistant name=%s", name)
+	}
+
+	return nil
+}
+
+// keyByName returns the API key for the specified assistant name.
+// Returns empty string if assistant name is unknown.
+func (cfg *Config) keyByName(name colgen.AssistantName) string {
+	switch name {
+	case colgen.AssistantDeepSeek:
+		return cfg.DeepSeekKey
+	case colgen.AssistantClaude:
+		return cfg.ClaudeKey
+	}
+
+	return ""
+}
+
+// exitOnErr logs the error and exits the program if error is not nil.
 func exitOnErr(err error) {
 	if err != nil {
 		log.Fatal("generation failed: ", err)
@@ -79,7 +115,7 @@ func main() {
 		fmt.Printf("colgen version: %v\n", appVersion())
 		return // quit
 	case *flWriteKey != "":
-		err := writeConfig(*flWriteKey)
+		err := writeConfig(*flWriteKey, colgen.AssistantName(*flAssistant))
 		exitOnErr(err)
 		return // quits
 	}
@@ -95,14 +131,14 @@ func main() {
 	}
 
 	// get colgen lines from file
-	cl, err := readFile(filename, cfg.Key != "")
+	cl, err := readFile(filename)
 	exitOnErr(err)
 
 	// if assistant was found, process only one instruction
 	if len(cl.assistant) > 0 {
 		now := time.Now()
 		log.Println("assisting: ", cl.assistant[0])
-		assistFile(cfg.Key, cl.assistant[0], filename)
+		assistFile(cfg, cl.assistant[0], filename)
 		log.Println("assisting done", time.Since(now))
 		return
 	}
@@ -119,11 +155,18 @@ func main() {
 	generateFile(cl, filename)
 }
 
-func assistFile(key, assistPrompt, filename string) {
-	aa := colgen.NewAssistant(key)
-	am := colgen.AssistMode(assistPrompt)
+func assistFile(cfg Config, assistPrompt, filename string) {
+	am, an, err := extractAIPrompts(assistPrompt)
+	if err != nil {
+		exitOnErr(err)
+	}
 
-	if err := aa.IsValidMode(am); err != nil {
+	aa, err := colgen.NewAssistant(an, cfg.keyByName(an))
+	if err != nil {
+		exitOnErr(err)
+	}
+
+	if err = aa.IsValidMode(am); err != nil {
 		exitOnErr(err)
 	}
 
@@ -159,6 +202,47 @@ func assistFile(key, assistPrompt, filename string) {
 		err = os.WriteFile(tp.TestFilename, []byte(r), os.ModePerm)
 		exitOnErr(err)
 	}
+}
+
+// extractAIPrompts Extracts AI mode and name if specified.
+// name is specified in parentheses like a function argument. Uses "deepseek" by default.
+// example:
+//
+//	"readme(deepseek)" -> "readme", "deepseek", nil
+//	review(claude)     -> "review", "claude",   nil
+//	tests()            -> "tests",  "deepseek", nil
+//	readme             -> "readme", "deepseek", nil
+//	invalid            -> "",       "deepseek", nil
+//
+//	readme(invalid)    -> "", "", error
+//	readme)(invalid)   -> "", "", error
+//	readme)(invalid    -> "", "", error
+//	readme(invalid     -> "", "", error
+func extractAIPrompts(aiPrompt string) (mode colgen.AssistMode, name colgen.AssistantName, err error) {
+	name = colgen.AssistantDeepSeek
+
+	aiPrompt = strings.ReplaceAll(aiPrompt, " ", "")
+	// No parenthesis found — return mode and default assistant
+	idx := strings.Index(aiPrompt, "(")
+	if idx == -1 {
+		return colgen.AssistMode(aiPrompt), name, nil
+	}
+
+	// If it contains, rewrite mode
+	mode = colgen.AssistMode(aiPrompt[:idx])
+	// Try to find closing parenthesis
+	endIdx := strings.Index(aiPrompt, ")")
+	if endIdx == -1 || endIdx < idx {
+		return "", "", errors.New("invalid AI prompt, \")\" is not found or has invalid position")
+	}
+
+	// Extract name between parentheses
+	sName := aiPrompt[idx+1 : endIdx]
+	if sName != "" {
+		name = colgen.AssistantName(sName)
+	}
+
+	return
 }
 
 func replaceFile(cl colgenLines, filename string) {
@@ -220,7 +304,7 @@ type colgenLines struct {
 }
 
 // readFile parses file line by line and returns all colgen lines without prefix.
-func readFile(filename string, withAssistant bool) (result colgenLines, err error) {
+func readFile(filename string) (result colgenLines, err error) {
 	f, err := os.Open(filename)
 	if err != nil {
 		return
@@ -237,7 +321,7 @@ func readFile(filename string, withAssistant bool) (result colgenLines, err erro
 
 		switch {
 		// find assistant lines
-		case withAssistant && strings.HasPrefix(line, colgen.AssistantPrefix):
+		case strings.HasPrefix(line, colgen.AssistantPrefix):
 			if l, ok := strings.CutPrefix(line, colgen.AssistantPrefix); ok {
 				result.assistant = append(result.assistant, l)
 			}
@@ -286,15 +370,32 @@ func appVersion() string {
 }
 
 // writeConfig creates config in home dir.
-func writeConfig(key string) error {
+func writeConfig(key string, name colgen.AssistantName) error {
 	cp, err := configPath()
 	if err != nil {
 		return err
 	}
 
+	// Open existing config file not to erase existing keys
+	cfg, err := readConfig()
+	if err != nil {
+		return fmt.Errorf("reading config: %w", err)
+	}
+
+	// Set default deepseek assistant
+	if name == "" {
+		name = colgen.AssistantDeepSeek
+	}
+
+	// Set needed key by assistant name
+	if err = cfg.fillByName(name, key); err != nil {
+		return err
+	}
+
+	// Write result
 	var buf bytes.Buffer
 	enc := toml.NewEncoder(&buf)
-	if err := enc.Encode(Config{Key: key}); err != nil {
+	if err := enc.Encode(cfg); err != nil {
 		return fmt.Errorf("create config failed: %w", err)
 	}
 
@@ -329,5 +430,6 @@ func readConfig() (Config, error) {
 	}
 
 	_, err = toml.DecodeFile(cp, &cfg)
+
 	return cfg, err
 }

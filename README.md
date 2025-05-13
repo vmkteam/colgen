@@ -37,12 +37,13 @@ go install github.com/vmkteam/colgen/cmd/colgen@latest
 
 ### Command Line Flags
 
-| Flag         | Description                           | Default |
-|--------------|---------------------------------------|---------|
-| `-list`      | Use "List" suffix for collections     | false   |
-| `-imports`   | Custom import paths (comma-separated) | ""      |
-| `-funcpkg`   | Package for Map & MapP functions      | ""      |
-| `-write-key` | Write assistant key to homedir        | ""      |
+| Flag         | Description                                 | Default    |
+|--------------|---------------------------------------------|------------|
+| `-list`      | Use "List" suffix for collections           | false      |
+| `-imports`   | Custom import paths (comma-separated)       | ""         |
+| `-funcpkg`   | Package for Map & MapP functions            | ""         |
+| `-write-key` | Write assistant key to homedir              | ""         |
+| `-ai`        | Choose assistant whose key is being written | "deepseek" |
 
 ## Generation Modes
 
@@ -72,7 +73,27 @@ For `//colgen:<struct>,<struct>,...`:
 
 `colgen -write-key=<deepseek key>`
 
+It writes _deepseek_ key to the config file.
+If you want to use _claude_, run:
+
+`colgen -write-key=<claude key> -ai=claude`
+
+Supported assistants at the moment: **deepseek**, **claude**.
+
+Note: _if you run it not the first time, it replaces only key of chosen assistant.
+So, you can add both keys and choose assistant to run from a special comment._
+
 ```go
 //go:generate colgen 
 //colgen@ai:<readme|review|tests>
 ```
+
+Examples:
+
+```go
+//go:generate colgen 
+//colgen@ai:readme           // makes readme using deepseek by default
+//colgen@ai:tests(deepseek)  // makes tests using deepseek explicitly
+//colgen@ai:review(claude)   // makes review using claude
+```
+

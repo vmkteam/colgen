@@ -5,20 +5,16 @@
 package colgen
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/go-deepseek/deepseek"
-	"github.com/go-deepseek/deepseek/config"
-	"github.com/go-deepseek/deepseek/request"
 )
 
 // AssistMode represents the type of AI assistance to provide.
 type AssistMode string
+type AssistantName string
 
 const (
 	// ModeReview requests a code review of the provided content.
@@ -28,22 +24,38 @@ const (
 	ModeReadme AssistMode = "readme"
 
 	ModeTests AssistMode = "tests"
+
+	AssistantDeepSeek AssistantName = "deepseek"
+	AssistantClaude   AssistantName = "claude"
 )
 
 var ErrUnsupportedAssistMode = errors.New("unsupported assist mode")
+var ErrUnsupportedAssistName = errors.New("unsupported assist name")
 
 // Assistant provides AI-assisted code generation capabilities.
 // It requires a valid Deepseek API key for initialization.
 type Assistant struct {
 	key string
+	c   caller
 }
 
 // NewAssistant creates a new Assistant instance with the provided API key.
 // The key should be a valid Deepseek API key.
-func NewAssistant(key string) *Assistant {
+func NewAssistant(n AssistantName, key string) (*Assistant, error) {
+	var c caller
+	switch n {
+	case AssistantDeepSeek:
+		c = DeepSeekCaller{Key: key}
+	case AssistantClaude:
+		c = ClaudeCaller{Key: key}
+	default:
+		return nil, ErrUnsupportedAssistName
+	}
+
 	return &Assistant{
 		key: key,
-	}
+		c:   c,
+	}, nil
 }
 
 // IsValidMode checks if the provided mode string is a valid assistance mode.
@@ -84,17 +96,17 @@ func (a *Assistant) Generate(am AssistMode, content string) (code string, err er
 // Review generates a code review for the provided Go code.
 // Returns the review as Markdown text or an error if the request fails.
 func (a *Assistant) Review(code string) (string, error) {
-	return a.call(Code{SystemPrompt: systemPromptReview, Prompt: code})
+	return a.c.call(Code{SystemPrompt: systemPromptReview, Prompt: code})
 }
 
 // Readme generates a README for the provided Go code.
 // Returns the README as Markdown text or an error if the request fails.
 func (a *Assistant) Readme(code string) (string, error) {
-	return a.call(Code{SystemPrompt: systemPromptReadme, Prompt: code})
+	return a.c.call(Code{SystemPrompt: systemPromptReadme, Prompt: code})
 }
 
 func (a *Assistant) Tests(code string) (string, error) {
-	return a.call(Code{SystemPrompt: systemPromptTests, Prompt: code})
+	return a.c.call(Code{SystemPrompt: systemPromptTests, Prompt: code})
 }
 
 type UserTestPrompt struct {
@@ -143,52 +155,9 @@ func testFilename(filename string) string {
 	return filepath.Join(dir, name+"_test.go")
 }
 
-func (a *Assistant) call(c Code) (string, error) {
-	const callTimeout = 300
-	client, err := deepseek.NewClientWithConfig(config.Config{
-		ApiKey:         a.key,
-		TimeoutSeconds: callTimeout,
-	})
-	if err != nil {
-		return "", err
-	}
-
-	temperature := float32(0)
-	chatReq := &request.ChatCompletionsRequest{
-		Messages: []*request.Message{
-			{
-				Role:    "system",
-				Content: c.SystemPrompt,
-			},
-			{
-				Role:    "user",
-				Content: c.Prompt,
-			},
-		},
-		Model:       deepseek.DEEPSEEK_CHAT_MODEL,
-		Temperature: &temperature,
-	}
-
-	chatResp, err := client.CallChatCompletionsChat(context.Background(), chatReq)
-	if err != nil {
-		return "", err
-	}
-	return chatResp.Choices[0].Message.Content, nil
-}
-
 const systemPromptReview = `You are a professional Go developer and testing expert.
 You write idiomatic go code.
-Your essential development resources:
-* Go
-  * https://go.dev/doc/effective_go
-  * https://go.dev/doc/faq
-  * https://go.dev/talks/2014/names.slide
-  * https://go-proverbs.github.io/
-  * https://dave.cheney.net/practical-go/presentations/gophercon-singapore-2019.html
-  * https://github.com/diptomondal007/GoLangBooks/blob/master/50%20Shades%20of%20Go%20Traps%20GotchasandCommonMistakesforNewGolangDevs.pdf
-  * https://google.github.io/styleguide/go/
-  * https://google.github.io/styleguide/go/best-practices
-  * https://12factor.net/
+` + basicLinks + `
 
 ---
 I will give you one file from go project for review. 

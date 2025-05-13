@@ -22,7 +22,8 @@ func TestIsValidMode(t *testing.T) {
 		{"invalid random mode", "random", true},
 	}
 
-	a := NewAssistant("test-key")
+	a, err := NewAssistant(AssistantDeepSeek, "test-key")
+	require.NoError(t, err)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := a.IsValidMode(tt.mode)
@@ -38,8 +39,9 @@ func TestIsValidMode(t *testing.T) {
 
 func TestGenerate(t *testing.T) {
 	t.Run("returns error for invalid mode", func(t *testing.T) {
-		a := NewAssistant("test-key")
-		_, err := a.Generate("invalid", "content")
+		a, err := NewAssistant(AssistantDeepSeek, "test-key")
+		require.NoError(t, err)
+		_, err = a.Generate("invalid", "content")
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrUnsupportedAssistMode)
 	})

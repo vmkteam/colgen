@@ -248,6 +248,8 @@ linters:
           # Whether to skip (*x).method() calls where x is a pointer receiver.
           # Default: true
           skipRecvDeref: false
+      disabled-checks:
+        - commentFormatting # Strict for multiple-line comments
 
     govet:
       # Enable all analyzers.
