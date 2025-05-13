@@ -187,7 +187,7 @@ func TestConfigFillByAssistName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := tt.config.fillByAssistName(tt.assistName, tt.key)
+			err := tt.config.fillByName(tt.assistName, tt.key)
 
 			if tt.wantErr {
 				assert.Error(t, err)

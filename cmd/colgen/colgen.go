@@ -67,9 +67,9 @@ type Config struct {
 	ClaudeKey   string
 }
 
-// fillByAssistName sets the API key for the specified assistant name.
+// fillByName sets the API key for the specified assistant name.
 // Returns error if config is nil or assistant name is unknown.
-func (cfg *Config) fillByAssistName(name colgen.AssistantName, key string) error {
+func (cfg *Config) fillByName(name colgen.AssistantName, key string) error {
 	if cfg == nil {
 		return errors.New("nil config")
 	}
@@ -388,7 +388,7 @@ func writeConfig(key string, name colgen.AssistantName) error {
 	}
 
 	// Set needed key by assistant name
-	if err = cfg.fillByAssistName(name, key); err != nil {
+	if err = cfg.fillByName(name, key); err != nil {
 		return err
 	}
 
