@@ -30,9 +30,6 @@
 // //colgen@newUserSummary(newsportal.User,full,json)
 package main
 
-//go:generate colgen
-//colgen@ai:tests(claude)
-
 import (
 	"bufio"
 	"bytes"
