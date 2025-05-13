@@ -224,6 +224,7 @@ func assistFile(cfg Config, assistPrompt, filename string) {
 func extractAIPrompts(aiPrompt string) (mode colgen.AssistMode, name colgen.AssistantName, err error) {
 	name = colgen.AssistantDeepSeek
 
+	aiPrompt = strings.ReplaceAll(aiPrompt, " ", "")
 	// No parenthesis found — return mode and default assistant
 	idx := strings.Index(aiPrompt, "(")
 	if idx == -1 {
