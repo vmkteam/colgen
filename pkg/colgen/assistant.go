@@ -30,6 +30,7 @@ const (
 )
 
 var ErrUnsupportedAssistMode = errors.New("unsupported assist mode")
+var ErrUnsupportedAssistName = errors.New("unsupported assist name")
 
 // Assistant provides AI-assisted code generation capabilities.
 // It requires a valid Deepseek API key for initialization.
@@ -40,19 +41,21 @@ type Assistant struct {
 
 // NewAssistant creates a new Assistant instance with the provided API key.
 // The key should be a valid Deepseek API key.
-func NewAssistant(n AssistantName, key string) *Assistant {
+func NewAssistant(n AssistantName, key string) (*Assistant, error) {
 	var c caller
 	switch n {
 	case AssistantDeepSeek:
 		c = DeepSeekCaller{Key: key}
 	case AssistantClaude:
 		c = ClaudeCaller{Key: key}
+	default:
+		return nil, ErrUnsupportedAssistName
 	}
 
 	return &Assistant{
 		key: key,
 		c:   c,
-	}
+	}, nil
 }
 
 // IsValidMode checks if the provided mode string is a valid assistance mode.
