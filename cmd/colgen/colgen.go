@@ -5,7 +5,7 @@
 //	//go:generate colgen
 //	//colgen:News,Category,Tag
 //	//colgen:News:TagIDs,UniqueTagIDs,Map(db),UUID
-//	//colgen:Episode:ShowIDs,MapP(db.SiteUser),Index(MovieID)
+//	//colgen:Episode:ShowIDs,MapP(db.SiteUser),Index(MovieID),Group(ShowID)
 //	//colgen:Show:MapP(db)
 //	//colgen:Season:mapp(db)
 //
@@ -20,6 +20,7 @@
 //
 // Custom generators
 // - `Index` can accept another field for creating index. By default, it is ID.
+// - `Group` can accept field for group by operation.
 // - <Field>: collect all values from field.
 // - Unique<Field>: collect unique values from field.
 // - MapP: `func NewUsers(in []<arg>) <structs> { return <func pkg>MapP(in, New<struct>) }`

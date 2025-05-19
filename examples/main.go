@@ -3,7 +3,7 @@ package main
 //go:generate go run ../cmd/colgen/colgen.go
 
 //colgen:News,Tag
-//colgen:News:Index(Title)
+//colgen:News:Index(Title),Group(Title),UniqueTitle,UniqueTagIDs
 
 func main() {
 

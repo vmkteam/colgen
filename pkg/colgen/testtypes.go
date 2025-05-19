@@ -13,5 +13,6 @@ type (
 	Tag struct {
 		ID          int
 		OrderNumber int64
+		Name        string
 	}
 )
