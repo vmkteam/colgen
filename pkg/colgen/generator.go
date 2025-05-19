@@ -24,6 +24,7 @@ const (
 	CustomRuleMap    = "Map"
 	CustomRuleMapP   = "MapP"
 	CustomRuleIndex  = "Index"
+	CustomRuleGroup  = "Group"
 	FieldID          = "ID"
 
 	ColgenPrefix    = "//colgen:"
@@ -182,7 +183,7 @@ func parseCustomRule(line string) ([]Rule, error) {
 
 			cr.Name = name
 			cr.Arg = arg
-		case name == CustomRuleIndex: // Index(UserID)
+		case name == CustomRuleIndex || name == CustomRuleGroup: // Index(UserID) or Group(UserID)
 			if arg == "" {
 				return nil, fmt.Errorf("%w: %q", ErrMissingArg, l)
 			}
@@ -374,6 +375,8 @@ func (g *Generator) generateByRule(rule Rule) error {
 			}
 		case CustomRuleIndex:
 			g.genIndex(TemplateData{FieldType: fType, FieldName: cr.Field, FuncName: "By" + cr.Field, Entity: e})
+		case CustomRuleGroup:
+			g.genGroup(TemplateData{FieldType: fType, FieldName: cr.Field, FuncName: "By" + cr.Field, Entity: e})
 		case "":
 			g.genField(TemplateData{FieldType: fType, FieldName: cr.Field, Entity: e})
 		}
@@ -415,7 +418,7 @@ func (ll {{.Entity.List}}) {{.FuncName}}() []{{.FieldType}} {
 	g.T(tmpl, data)
 }
 
-// genField generates Index to Buffer.
+// genIndex generates Index to Buffer.
 func (g *Generator) genIndex(data TemplateData) {
 	const tmpl = `
 func (ll {{.Entity.List}}) Index{{.FuncName}}() map[{{.FieldType}}]{{.Entity.Name}} {
@@ -429,11 +432,25 @@ func (ll {{.Entity.List}}) Index{{.FuncName}}() map[{{.FieldType}}]{{.Entity.Nam
 	g.T(tmpl, data)
 }
 
+// genGroup generates Group to Buffer.
+func (g *Generator) genGroup(data TemplateData) {
+	const tmpl = `
+func (ll {{.Entity.List}}) Group{{.FuncName}}() map[{{.FieldType}}]{{.Entity.List}} {
+	r := make(map[{{.FieldType}}]{{.Entity.List}}, len(ll))
+	for i := range ll {
+		r[ll[i].{{.FieldName}}] = append(r[ll[i].{{.FieldName}}], ll[i])
+	}
+	return r
+}`
+
+	g.T(tmpl, data)
+}
+
 // genUniqueField generates Unique Field to Buffer.
 func (g *Generator) genUniqueField(data TemplateData) {
 	const tmpl = `
 func (ll {{.Entity.List}}) Unique{{.FuncName}}() []{{.FieldType}} {
-	idx := make(map[{{.FieldType}}]struct{})
+	idx := make(map[{{.FieldType}}]struct{}, len(ll))
 	for i := range ll {
 		if _, ok := idx[ll[i].{{.FieldName}}]; !ok {
              idx[ll[i].{{.FieldName}}] = struct{}{}
@@ -455,7 +472,7 @@ func (ll {{.Entity.List}}) Unique{{.FuncName}}() []{{.FieldType}} {
 func (g *Generator) genUniqueFieldSlice(data TemplateData) {
 	const tmpl = `
 func (ll {{.Entity.List}}) Unique{{.FuncName}}() []{{.FieldType}} {
-	idx := make(map[{{.FieldType}}]struct{})
+	idx := make(map[{{.FieldType}}]struct{}, len(ll))
 	for i := range ll {
 		for _, v := range ll[i].{{.FieldName}} {
 		    if _, ok := idx[v]; !ok {

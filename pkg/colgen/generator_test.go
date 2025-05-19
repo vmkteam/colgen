@@ -169,7 +169,7 @@ func (ll Tags) OrderNumbers() []int64 {
 }
 
 func (ll Tags) UniqueOrderNumbers() []int64 {
-	idx := make(map[int64]struct{})
+	idx := make(map[int64]struct{}, len(ll))
 	for i := range ll {
 		if _, ok := idx[ll[i].OrderNumber]; !ok {
 			idx[ll[i].OrderNumber] = struct{}{}
@@ -183,13 +183,21 @@ func (ll Tags) UniqueOrderNumbers() []int64 {
 	}
 	return r
 }
+
+func (ll Tags) GroupByName() map[string]Tags {
+	r := make(map[string]Tags, len(ll))
+	for i := range ll {
+		r[ll[i].Name] = append(r[ll[i].Name], ll[i])
+	}
+	return r
+}
 `
 
 	// start
 	raw := `
 News,Tag,Category
 News:MapP(db)
-Tag:Index(OrderNumber),OrderNumber,UniqueOrderNumber
+Tag:Index(OrderNumber),OrderNumber,UniqueOrderNumber,Group(Name)
 `
 	lines := strings.Split(raw, "\n")
 	imports := "pkg/db,pkg/newsportal"

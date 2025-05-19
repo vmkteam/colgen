@@ -11,6 +11,7 @@ Colgen is a powerful Go code generation tool that automates the creation of coll
     - Base collection types (`[]Struct`)
     - Field value collectors
     - Unique field value collectors
+    - Group slice by field
     - Converters and Index functions
 - AI-assisted review/readme/tests generation
 - Code injection capabilities
@@ -30,7 +31,7 @@ go install github.com/vmkteam/colgen/cmd/colgen@latest
 //go:generate colgen
 //colgen:News,Category,Tag
 //colgen:News:TagIDs,UniqueTagIDs,Map(db),UUID
-//colgen:Episode:ShowIDs,MapP(db.SiteUser),Index(MovieID)
+//colgen:Episode:ShowIDs,MapP(db.SiteUser),Index(MovieID),Group(ShowID)
 //colgen:Show:MapP(db)
 //colgen:Season:mapp(db)
 ```
@@ -58,6 +59,7 @@ For `//colgen:<struct>,<struct>,...`:
 ### Custom Generators
 
 - `Index(field)` - Create index by specified field (default: ID)
+- `Group(field)` - Group slice by specified field
 - `<Field>` - Collect all values from field
 - `Unique<Field>` - Collect unique values from field
 - `MapP` - Generate mapping function with package prefix
