@@ -25,6 +25,9 @@ const (
 	CustomRuleMapP   = "MapP"
 	CustomRuleIndex  = "Index"
 	CustomRuleGroup  = "Group"
+	CustomRuleCount  = "Count"
+	CustomRuleFill   = "Fill"
+	CustomRuleCast   = "Cast"
 	FieldID          = "ID"
 
 	ColgenPrefix    = "//colgen:"
@@ -146,11 +149,35 @@ func mergeRules(rules []Rule, useListSuffix bool) []Rule {
 // isMapP checks string for Map/MapP/map/mapp.
 func isMapP(s string) bool {
 	s = strings.ToLower(s)
-	return s == strings.ToLower(CustomRuleMap) || s == strings.ToLower(CustomRuleMapP)
+	return s == "map" || s == "mapp"
 }
 
 // reNameArg is regexp for `Index(db.User)` lookalike string.
 var reNameArg = regexp.MustCompile(`(?mi)^(\w+)\(([\w.]+)\)$`)
+
+// reNameTwoArgs is regexp for `Fill(Tags,TagIDs)` lookalike string.
+var reNameTwoArgs = regexp.MustCompile(`(?mi)^(\w+)\(([\w.]+),([\w.]+)\)$`)
+
+// splitRespectingParens splits string by comma, but respects parentheses.
+func splitRespectingParens(s string) []string {
+	var parts []string
+	depth, start := 0, 0
+	for i, c := range s {
+		switch c {
+		case '(':
+			depth++
+		case ')':
+			depth--
+		case ',':
+			if depth == 0 {
+				parts = append(parts, s[start:i])
+				start = i + 1
+			}
+		}
+	}
+	parts = append(parts, s[start:])
+	return parts
+}
 
 // parseCustomRule parses custom rules like `//colgen:News:UniqueTagIDs,Map`.
 func parseCustomRule(line string) ([]Rule, error) {
@@ -164,11 +191,12 @@ func parseCustomRule(line string) ([]Rule, error) {
 	rule.EntityName = ll[0]
 
 	// process all custom generators
-	for _, l := range strings.Split(ll[1], ",") {
-		name, arg := l, ""
-		matches := reNameArg.FindStringSubmatch(l)
-		if len(matches) == 3 {
-			name, arg = matches[1], matches[2]
+	for _, l := range splitRespectingParens(ll[1]) {
+		name, arg, arg2 := l, "", ""
+		if m := reNameTwoArgs.FindStringSubmatch(l); len(m) == 4 {
+			name, arg, arg2 = m[1], m[2], m[3]
+		} else if m := reNameArg.FindStringSubmatch(l); len(m) == 3 {
+			name, arg = m[1], m[2]
 		}
 
 		var cr CustomRule
@@ -183,13 +211,20 @@ func parseCustomRule(line string) ([]Rule, error) {
 
 			cr.Name = name
 			cr.Arg = arg
-		case name == CustomRuleIndex || name == CustomRuleGroup: // Index(UserID) or Group(UserID)
+		case name == CustomRuleIndex || name == CustomRuleGroup || name == CustomRuleCount || name == CustomRuleCast: // Index(UserID) or Group(UserID) or Count(StatusID) or Cast(Iface)
 			if arg == "" {
 				return nil, fmt.Errorf("%w: %q", ErrMissingArg, l)
 			}
 
 			cr.Name = name
 			cr.Field = arg
+		case name == CustomRuleFill: // Fill(Tags,TagIDs)
+			if arg == "" || arg2 == "" {
+				return nil, fmt.Errorf("%w: %q", ErrMissingArg, l)
+			}
+			cr.Name = CustomRuleFill
+			cr.Field = arg
+			cr.Arg = arg2
 		default: // Field, like ID => IDs()
 			cr.Field = name
 		}
@@ -368,27 +403,74 @@ func (g *Generator) generateByRule(rule Rule) error {
 		case strings.ToLower(CustomRuleMapP):
 			g.genMap(CustomRuleMapP, TemplateData{FieldType: cr.Arg, Entity: e}, true, rule.BaseGen)
 		case CustomRuleUnique:
-			if strings.HasPrefix(fType, "[]") {
-				g.genUniqueFieldSlice(TemplateData{FieldType: strings.TrimPrefix(fType, "[]"), FieldName: cr.Field, Entity: e})
+			if elem, ok := strings.CutPrefix(fType, "[]"); ok {
+				g.genUniqueFieldSlice(TemplateData{FieldType: elem, FieldName: cr.Field, Entity: e})
+			} else if elem, ok := strings.CutPrefix(fType, "*"); ok {
+				g.genUniqueFieldPtr(TemplateData{FieldType: elem, FieldName: cr.Field, Entity: e})
 			} else {
 				g.genUniqueField(TemplateData{FieldType: fType, FieldName: cr.Field, Entity: e})
 			}
 		case CustomRuleIndex:
 			g.genIndex(TemplateData{FieldType: fType, FieldName: cr.Field, FuncName: "By" + cr.Field, Entity: e})
 		case CustomRuleGroup:
-			g.genGroup(TemplateData{FieldType: fType, FieldName: cr.Field, FuncName: "By" + cr.Field, Entity: e})
+			if elem, ok := strings.CutPrefix(fType, "[]"); ok {
+				g.genGroupSlice(TemplateData{FieldType: elem, FieldName: cr.Field, FuncName: "By" + cr.Field, Entity: e})
+			} else {
+				g.genGroup(TemplateData{FieldType: fType, FieldName: cr.Field, FuncName: "By" + cr.Field, Entity: e})
+			}
+		case CustomRuleCount:
+			g.genCount(TemplateData{FieldType: fType, FieldName: cr.Field, FuncName: "By" + cr.Field, Entity: e})
+		case CustomRuleFill:
+			g.generateFill(fields, cr, e)
+		case CustomRuleCast:
+			g.genCast(TemplateData{FieldType: cr.Field, Entity: e})
 		case "":
-			g.genField(TemplateData{FieldType: fType, FieldName: cr.Field, Entity: e})
+			if elem, ok := strings.CutPrefix(fType, "[]"); ok {
+				g.genFieldSlice(TemplateData{FieldType: elem, FieldName: cr.Field, Entity: e})
+			} else if elem, ok := strings.CutPrefix(fType, "*"); ok {
+				g.genFieldPtr(TemplateData{FieldType: elem, FieldName: cr.Field, Entity: e})
+			} else {
+				g.genField(TemplateData{FieldType: fType, FieldName: cr.Field, Entity: e})
+			}
 		}
 		g.L()
 
 		// check for good type and name
-		if !hasF && (!isMapP(cr.Name)) {
+		if !hasF && !isMapP(cr.Name) && cr.Name != CustomRuleCast {
 			return fmt.Errorf("%w: %s", ErrMissingField, cr.Field)
 		}
 	}
 
 	return nil
+}
+
+// generateFill resolves related type from fields and generates Fill method.
+func (g *Generator) generateFill(fields map[string]string, cr CustomRule, e Entity) {
+	junctionType, okJunction := fields[cr.Arg]
+	targetFieldType, okTarget := fields[cr.Field]
+	if !okJunction || !okTarget {
+		g.SetError(fmt.Errorf("%w: Fill(%s,%s)", ErrMissingField, cr.Field, cr.Arg))
+		return
+	}
+
+	relatedType := strings.TrimPrefix(targetFieldType, "[]")
+	relatedType = strings.TrimPrefix(relatedType, "*")
+	relatedList := inflection.Plural(relatedType)
+
+	td := TemplateData{
+		Entity:    e,
+		FieldType: relatedList,
+		FieldName: cr.Arg,
+		FuncName:  cr.Field,
+	}
+
+	if _, ok := strings.CutPrefix(junctionType, "[]"); ok {
+		g.genFillSlice(td)
+	} else if _, ok := strings.CutPrefix(junctionType, "*"); ok {
+		g.genFillPtr(td)
+	} else {
+		g.SetError(fmt.Errorf("%w: unsupported junction type %q for Fill(%s,%s)", ErrMissingField, junctionType, cr.Field, cr.Arg))
+	}
 }
 
 type TemplateData struct {
@@ -401,6 +483,38 @@ type TemplateData struct {
 // genType writes collection Type to Buffer.
 func (g *Generator) genType(e Entity) {
 	g.P("type %s []%s", e.List, e.Name)
+}
+
+// genFieldPtr generates Field (pointer) to Buffer with nil-check and dereference.
+func (g *Generator) genFieldPtr(data TemplateData) {
+	const tmpl = `
+func (ll {{.Entity.List}}) {{.FuncName}}() []{{.FieldType}} {
+	var r []{{.FieldType}}
+	for i := range ll {
+		if ll[i].{{.FieldName}} != nil {
+			r = append(r, *ll[i].{{.FieldName}})
+		}
+	}
+	return r
+}`
+
+	data.FuncName = lastRuneToLower(inflection.Plural(data.FieldName))
+	g.T(tmpl, data)
+}
+
+// genFieldSlice generates Field (slice) to Buffer with flatten.
+func (g *Generator) genFieldSlice(data TemplateData) {
+	const tmpl = `
+func (ll {{.Entity.List}}) {{.FuncName}}() []{{.FieldType}} {
+	var r []{{.FieldType}}
+	for i := range ll {
+		r = append(r, ll[i].{{.FieldName}}...)
+	}
+	return r
+}`
+
+	data.FuncName = lastRuneToLower(inflection.Plural(data.FieldName))
+	g.T(tmpl, data)
 }
 
 // genField generates Field to Buffer.
@@ -493,6 +607,114 @@ func (ll {{.Entity.List}}) Unique{{.FuncName}}() []{{.FieldType}} {
 	g.T(tmpl, data)
 }
 
+// genUniqueFieldPtr generates Unique Field (pointer) to Buffer.
+func (g *Generator) genUniqueFieldPtr(data TemplateData) {
+	const tmpl = `
+func (ll {{.Entity.List}}) Unique{{.FuncName}}() []{{.FieldType}} {
+	idx := make(map[{{.FieldType}}]struct{}, len(ll))
+	for i := range ll {
+		if ll[i].{{.FieldName}} == nil {
+			continue
+		}
+		if _, ok := idx[*ll[i].{{.FieldName}}]; !ok {
+			idx[*ll[i].{{.FieldName}}] = struct{}{}
+		}
+	}
+
+	r, i := make([]{{.FieldType}}, len(idx)), 0
+	for k := range idx {
+		r[i] = k
+		i++
+	}
+	return r
+}`
+	data.FuncName = lastRuneToLower(inflection.Plural(data.FieldName))
+	g.T(tmpl, data)
+}
+
+// genGroupSlice generates Group by slice field to Buffer.
+func (g *Generator) genGroupSlice(data TemplateData) {
+	const tmpl = `
+func (ll {{.Entity.List}}) Group{{.FuncName}}() map[{{.FieldType}}]{{.Entity.List}} {
+	r := make(map[{{.FieldType}}]{{.Entity.List}})
+	for i := range ll {
+		for _, v := range ll[i].{{.FieldName}} {
+			r[v] = append(r[v], ll[i])
+		}
+	}
+	return r
+}`
+
+	g.T(tmpl, data)
+}
+
+// genCount generates CountBy to Buffer.
+func (g *Generator) genCount(data TemplateData) {
+	const tmpl = `
+func (ll {{.Entity.List}}) Count{{.FuncName}}(v {{.FieldType}}) int {
+	var c int
+	for i := range ll {
+		if ll[i].{{.FieldName}} == v {
+			c++
+		}
+	}
+	return c
+}`
+
+	g.T(tmpl, data)
+}
+
+// genCast generates Cast to interface slice to Buffer.
+func (g *Generator) genCast(data TemplateData) {
+	const tmpl = `
+func (ll {{.Entity.List}}) {{.FuncName}}() []{{.FieldType}} {
+	r := make([]{{.FieldType}}, len(ll))
+	for i := range ll {
+		r[i] = &ll[i]
+	}
+	return r
+}`
+
+	data.FuncName = lastRuneToLower(inflection.Plural(data.FieldType))
+	g.T(tmpl, data)
+}
+
+// genFillSlice generates Fill by slice junction field to Buffer.
+func (g *Generator) genFillSlice(data TemplateData) {
+	const tmpl = `
+func (ll {{.Entity.List}}) Fill{{.FuncName}}(related {{.FieldType}}) {{.Entity.List}} {
+	index := related.Index()
+	for i := range ll {
+		for _, id := range ll[i].{{.FieldName}} {
+			if v, ok := index[id]; ok {
+				ll[i].{{.FuncName}} = append(ll[i].{{.FuncName}}, v)
+			}
+		}
+	}
+	return ll
+}`
+
+	g.T(tmpl, data)
+}
+
+// genFillPtr generates Fill by pointer FK field to Buffer.
+func (g *Generator) genFillPtr(data TemplateData) {
+	const tmpl = `
+func (ll {{.Entity.List}}) Fill{{.FuncName}}(related {{.FieldType}}) {{.Entity.List}} {
+	index := related.Index()
+	for i := range ll {
+		if ll[i].{{.FieldName}} != nil {
+			if v, ok := index[*ll[i].{{.FieldName}}]; ok {
+				ll[i].{{.FuncName}} = &v
+			}
+		}
+	}
+	return ll
+}`
+
+	g.T(tmpl, data)
+}
+
 // genMap generates List Converter to Buffer.
 func (g *Generator) genMap(method string, data TemplateData, isLower, hasType bool) {
 	s := "func New%s(in []%s) %s { return %s(in, New%s) }"
@@ -538,6 +760,22 @@ func lastRuneToLower(s string) string {
 	}
 
 	return s[:len(s)-size] + string(lowerRune)
+}
+
+// baseType applies path.Base preserving type prefixes ([], *) and stripping package qualifier.
+func baseType(s string) string {
+	prefix := ""
+	if rest, ok := strings.CutPrefix(s, "[]"); ok {
+		prefix, s = "[]", rest
+	} else if rest, ok := strings.CutPrefix(s, "*"); ok {
+		prefix, s = "*", rest
+	}
+	s = path.Base(s)
+	// strip package qualifier: "colgen.Author" -> "Author"
+	if i := strings.LastIndex(s, "."); i >= 0 {
+		s = s[i+1:]
+	}
+	return prefix + s
 }
 
 func firsRuneToLower(s string) string {
@@ -590,16 +828,10 @@ func fillStructTypes(typ types.Type, indentLevel int, eTypes *[]entityField) {
 	if st, ok := typ.(*types.Struct); ok {
 		for i := range st.NumFields() {
 			field := st.Field(i)
-			indent := ""
-			for range indentLevel {
-				indent += "  "
-			}
 
 			if field.Embedded() {
-				// fmt.Printf("%s[mbed] %s (%s)\n", indent, field.Name(), field.Type())
 				fillStructTypes(field.Type(), indentLevel+1, eTypes)
 			} else {
-				// fmt.Printf("%s%s: %s\n", indent, field.Name(), field.Type())
 				*eTypes = append(*eTypes, entityField{
 					Name:       field.Name(),
 					Type:       field.Type().String(),
@@ -632,7 +864,7 @@ func typeSliceFromType(t types.Object) []entityField {
 	fillStructTypes(t.Type(), 0, &eTypes)
 	for i, e := range eTypes {
 		eTypes[i].FullType = e.Type
-		eTypes[i].Type = path.Base(e.Type)
+		eTypes[i].Type = baseType(e.Type)
 	}
 
 	return eTypes

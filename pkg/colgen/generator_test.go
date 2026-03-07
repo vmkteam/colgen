@@ -72,6 +72,39 @@ func TestParseRules(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name: "with_new_rules",
+			args: args{
+				lines: []string{
+					"News",
+					"News:Count(StatusID),Fill(Tags,TagIDs),Fill(Author,AuthorID)",
+				},
+				useListSuffix: false,
+			},
+			want: []Rule{
+				{
+					EntityName:    "News",
+					BaseGen:       true,
+					UseListSuffix: false,
+					CustomRules: []CustomRule{
+						{Name: "Count", Field: "StatusID", Arg: ""},
+						{Name: "Fill", Field: "Tags", Arg: "TagIDs"},
+						{Name: "Fill", Field: "Author", Arg: "AuthorID"},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name:    "error_count_no_arg",
+			args:    args{lines: []string{"News:Count"}, useListSuffix: false},
+			wantErr: true,
+		},
+		{
+			name:    "error_fill_one_arg",
+			args:    args{lines: []string{"News:Fill(Tags)"}, useListSuffix: false},
+			wantErr: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -95,6 +128,24 @@ import (
 	"pkg/db"
 	"pkg/newsportal"
 )
+
+type Authors []Author
+
+func (ll Authors) IDs() []int {
+	r := make([]int, len(ll))
+	for i := range ll {
+		r[i] = ll[i].ID
+	}
+	return r
+}
+
+func (ll Authors) Index() map[int]Author {
+	r := make(map[int]Author, len(ll))
+	for i := range ll {
+		r[ll[i].ID] = ll[i]
+	}
+	return r
+}
 
 type Categories []Category
 
@@ -133,6 +184,103 @@ func (ll NewsList) Index() map[int]News {
 }
 
 func NewNewsList(in []db.News) NewsList { return MapP(in, NewNews) }
+
+func (ll NewsList) UniqueAuthorIDs() []int {
+	idx := make(map[int]struct{}, len(ll))
+	for i := range ll {
+		if ll[i].AuthorID == nil {
+			continue
+		}
+		if _, ok := idx[*ll[i].AuthorID]; !ok {
+			idx[*ll[i].AuthorID] = struct{}{}
+		}
+	}
+
+	r, i := make([]int, len(idx)), 0
+	for k := range idx {
+		r[i] = k
+		i++
+	}
+	return r
+}
+
+func (ll NewsList) GroupByTagIDs() map[int]NewsList {
+	r := make(map[int]NewsList)
+	for i := range ll {
+		for _, v := range ll[i].TagIDs {
+			r[v] = append(r[v], ll[i])
+		}
+	}
+	return r
+}
+
+func (ll NewsList) CountByStatusID(v int) int {
+	var c int
+	for i := range ll {
+		if ll[i].StatusID == v {
+			c++
+		}
+	}
+	return c
+}
+
+func (ll NewsList) FillTags(related Tags) NewsList {
+	index := related.Index()
+	for i := range ll {
+		for _, id := range ll[i].TagIDs {
+			if v, ok := index[id]; ok {
+				ll[i].Tags = append(ll[i].Tags, v)
+			}
+		}
+	}
+	return ll
+}
+
+func (ll NewsList) FillAuthor(related Authors) NewsList {
+	index := related.Index()
+	for i := range ll {
+		if ll[i].AuthorID != nil {
+			if v, ok := index[*ll[i].AuthorID]; ok {
+				ll[i].Author = &v
+			}
+		}
+	}
+	return ll
+}
+
+func (ll NewsList) StatusIDs() []int {
+	r := make([]int, len(ll))
+	for i := range ll {
+		r[i] = ll[i].StatusID
+	}
+	return r
+}
+
+func (ll NewsList) Authors() []Author {
+	var r []Author
+	for i := range ll {
+		if ll[i].Author != nil {
+			r = append(r, *ll[i].Author)
+		}
+	}
+	return r
+}
+
+func (ll NewsList) Searchables() []Searchable {
+	r := make([]Searchable, len(ll))
+	for i := range ll {
+		r[i] = &ll[i]
+	}
+	return r
+}
+
+func (ll NewsList) TagIDs() []int {
+	var r []int
+	for i := range ll {
+		r = append(r, ll[i].TagIDs...)
+	}
+	return r
+}
 
 type Tags []Tag
 
@@ -195,8 +343,8 @@ func (ll Tags) GroupByName() map[string]Tags {
 
 	// start
 	raw := `
-News,Tag,Category
-News:MapP(db)
+News,Tag,Category,Author
+News:MapP(db),UniqueAuthorID,Group(TagIDs),Count(StatusID),Fill(Tags,TagIDs),Fill(Author,AuthorID),StatusID,Author,Cast(Searchable),TagIDs
 Tag:Index(OrderNumber),OrderNumber,UniqueOrderNumber,Group(Name)
 `
 	lines := strings.Split(raw, "\n")
